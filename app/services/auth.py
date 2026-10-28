@@ -1,68 +1,77 @@
-"""Registration / login.
-
-Owner: Asra (scaffold).
-"""
+"""Registration, login and token issuing (Backend A)."""
 
 from __future__ import annotations
 
-import re
-
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.errors import AppError
+from app.core.errors import AppError, sqlstate
 from app.core.security import create_access_token, hash_password, verify_password
 from app.models.user import User
-from app.schemas.user import UserLogin, UserRegister
-
-_LETTER = re.compile(r"[^\W\d_]", re.UNICODE)
-_DIGIT = re.compile(r"\d")
+from app.schemas.auth import RegisterIn, TokenOut
+from app.schemas.user import UserOut
 
 
-def _normalize_email(email: str) -> str:
+def normalize_email(email: str) -> str:
     return email.strip().lower()
 
 
-def _check_password_strength(password: str) -> None:
-    if not _LETTER.search(password) or not _DIGIT.search(password):
+def get_user_by_email(db: Session, email: str) -> User | None:
+    return db.scalar(select(User).where(User.email == normalize_email(email)))
+
+
+def get_user_by_id(db: Session, user_id: int) -> User | None:
+    return db.get(User, user_id)
+
+
+def register_user(db: Session, payload: RegisterIn) -> User:
+    email = normalize_email(str(payload.email))
+
+    if get_user_by_email(db, email) is not None:
         raise AppError(
-            "VALIDATION_ERROR",
-            422,
-            "رمز عبور باید حداقل یک حرف و یک رقم داشته باشد.",
-            details={"fields": {"password": "حداقل یک حرف و یک رقم لازم است."}},
+            "EMAIL_ALREADY_EXISTS",
+            409,
+            "This email is already registered. Sign in or use another address.",
+            {"field": "email"},
         )
-
-
-def register(db: Session, payload: UserRegister) -> tuple[User, str, int]:
-    email = _normalize_email(payload.email)
-    _check_password_strength(payload.password)
-
-    exists = db.scalar(select(User.id).where(User.email == email))
-    if exists is not None:
-        raise AppError("EMAIL_ALREADY_EXISTS", 409, "این ایمیل قبلاً ثبت شده است.")
 
     user = User(
         email=email,
         password_hash=hash_password(payload.password),
-        full_name=payload.full_name.strip(),
+        full_name=payload.full_name,
         phone=payload.phone,
     )
     db.add(user)
     try:
         db.commit()
-    except Exception as exc:  # unique race between two identical sign-ups
+    except IntegrityError as exc:
         db.rollback()
-        raise AppError("EMAIL_ALREADY_EXISTS", 409, "این ایمیل قبلاً ثبت شده است.") from exc
+        if sqlstate(exc) == "23505":  # unique_violation
+            raise AppError(
+                "EMAIL_ALREADY_EXISTS",
+                409,
+                "This email is already registered. Sign in or use another address.",
+                {"field": "email"},
+            ) from exc
+        raise
+    db.refresh(user)
+    return user
 
+
+def authenticate(db: Session, email: str, password: str) -> User:
+    user = get_user_by_email(db, email)
+    # Same message for both cases so we never leak whether an account exists.
+    if user is None or not verify_password(password, user.password_hash):
+        raise AppError("INVALID_CREDENTIALS", 401, "Incorrect email or password.")
+    return user
+
+
+def issue_token(user: User) -> TokenOut:
     token, expires_in = create_access_token(user.id)
-    return user, token, expires_in
-
-
-def login(db: Session, payload: UserLogin) -> tuple[User, str, int]:
-    email = _normalize_email(payload.email)
-    user = db.scalar(select(User).where(User.email == email))
-    if user is None or not verify_password(payload.password, user.password_hash):
-        raise AppError("INVALID_CREDENTIALS", 401, "ایمیل یا رمز عبور اشتباه است.")
-
-    token, expires_in = create_access_token(user.id)
-    return user, token, expires_in
+    return TokenOut(
+        access_token=token,
+        token_type="bearer",
+        expires_in=expires_in,
+        user=UserOut.model_validate(user),
+    )

@@ -11,8 +11,8 @@ def _iso(value: datetime) -> str:
 
 def _new_item(**overrides) -> dict:
     payload = {
-        "title": "دریل برقی بوش",
-        "description": "دریل چکشی ۷۵۰ وات",
+        "title": "Bosch electric drill",
+        "description": "750W hammer drill",
         "category": "tools",
         "condition": "good",
         "price_per_day": 50_000,
@@ -40,9 +40,9 @@ def test_create_item_ignores_body_owner_id(client, headers, borrower):
 
 def test_list_and_filters(client, headers, owner):
     for payload in (
-        _new_item(title="دریل برقی بوش"),
-        _new_item(title="چادر مسافرتی", category="outdoor", price_per_day=70_000),
-        _new_item(title="پروژکتور خانگی", category="electronics", price_per_day=90_000),
+        _new_item(title="Bosch electric drill"),
+        _new_item(title="Camping tent", category="outdoor", price_per_day=70_000),
+        _new_item(title="Home projector", category="electronics", price_per_day=90_000),
     ):
         assert client.post("/api/v1/items", json=payload, headers=headers(owner)).status_code == 201
 
@@ -55,11 +55,10 @@ def test_list_and_filters(client, headers, owner):
     cheap = client.get("/api/v1/items?price_max=60000").json()
     assert cheap["meta"]["total"] == 1
 
-    # "بوش" appears only in the drill's *title* — the seeded description of every
-    # item mentions "دریل", so a full-text search for "دریل" would match all three.
-    search = client.get("/api/v1/items?q=بوش").json()
+    # "Bosch" appears only in the drill's title, so the search must match one row.
+    search = client.get("/api/v1/items?q=Bosch").json()
     assert search["meta"]["total"] == 1
-    assert search["data"][0]["title"] == "دریل برقی بوش"
+    assert search["data"][0]["title"] == "Bosch electric drill"
 
     sorted_items = client.get("/api/v1/items?sort=price_desc").json()
     assert sorted_items["data"][0]["price_per_day"] == 90_000
@@ -67,7 +66,7 @@ def test_list_and_filters(client, headers, owner):
 
 def test_only_owner_can_patch(client, headers, owner, borrower, item):
     forbidden = client.patch(
-        f"/api/v1/items/{item.id}", json={"title": "عنوان جدید"}, headers=headers(borrower)
+        f"/api/v1/items/{item.id}", json={"title": "New title"}, headers=headers(borrower)
     )
     assert forbidden.status_code == 403
     assert forbidden.json()["error"]["code"] == "FORBIDDEN"
@@ -109,7 +108,7 @@ def test_delete_blocked_by_active_reservation(client, headers, owner, borrower, 
 def test_date_filter_returns_only_free_items(client, headers, owner, borrower, item):
     busy_item = item  # booked below
     free_item = client.post(
-        "/api/v1/items", json=_new_item(title="نردبان آلومینیومی"), headers=headers(owner)
+        "/api/v1/items", json=_new_item(title="Aluminum ladder"), headers=headers(owner)
     ).json()["data"]
 
     start = (datetime.now(timezone.utc) + timedelta(days=5)).replace(
@@ -155,7 +154,7 @@ def test_me_items_counters(client, headers, owner, borrower, item):
 def test_categories_endpoint(client, headers, owner):
     client.post("/api/v1/items", json=_new_item(), headers=headers(owner))
     client.post(
-        "/api/v1/items", json=_new_item(title="چادر مسافرتی", category="outdoor"), headers=headers(owner)
+        "/api/v1/items", json=_new_item(title="Camping tent", category="outdoor"), headers=headers(owner)
     )
 
     res = client.get("/api/v1/categories")

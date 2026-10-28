@@ -1,34 +1,26 @@
-"""User schemas.
-
-Owner: Asra (scaffold).  `password_hash` never leaves the process.
-"""
-
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-from app.schemas.common import UtcDatetime
+from app.schemas.common import UtcDateTime
+
+
+class UserBrief(BaseModel):
+    """Lightweight user representation (item owner in responses)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    full_name: str
 
 
 class UserOut(BaseModel):
-    id: int
-    email: str
-    full_name: str
-    phone: str | None
-    created_at: UtcDatetime
+    """Public user payload - never exposes `password_hash`."""
 
+    model_config = ConfigDict(from_attributes=True)
 
-class UserRegister(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    email: EmailStr
-    password: str = Field(min_length=8, max_length=72)
-    full_name: str = Field(min_length=2, max_length=80)
-    phone: str | None = Field(default=None, max_length=20)
-
-
-class UserLogin(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    email: EmailStr
-    password: str = Field(min_length=1, max_length=72)
+    id: int = Field(examples=[2])
+    email: EmailStr = Field(examples=["user@example.com"])
+    full_name: str = Field(examples=["Alex Carter"])
+    phone: str | None = Field(default=None, examples=["09121234567"])
+    created_at: UtcDateTime
