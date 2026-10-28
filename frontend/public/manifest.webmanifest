@@ -1,0 +1,10 @@
+{
+  "name": "BorrowBetter",
+  "short_name": "BorrowBetter",
+  "lang": "fa",
+  "dir": "rtl",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f6f9f3",
+  "theme_color": "#1c6144"
+}
