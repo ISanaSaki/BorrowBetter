@@ -1,0 +1,42 @@
+services:
+  db:
+    # Defaults to the ArvanCloud mirror because Docker Hub returns 403 from
+    # some networks (e.g. Iran). Outside those: POSTGRES_IMAGE=postgres:16-alpine
+    image: ${POSTGRES_IMAGE:-docker.arvancloud.ir/library/postgres:16-alpine}
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    # Host port is configurable so it never clashes with a local PostgreSQL (5432).
+    ports: ["${POSTGRES_HOST_PORT:-5432}:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-docker.arvancloud.ir/library/python:3.12-slim}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirror-pypi.runflare.com/simple}
+    env_file: .env
+    ports: ["8000:8000"]
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head &&
+             python -m app.seed &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    volumes: ["./app:/code/app", "./alembic:/code/alembic"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health')\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
