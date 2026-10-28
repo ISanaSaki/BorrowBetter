@@ -43,7 +43,7 @@ def build_permissions(
 def require_party(res: Reservation, user: User, owner_id: int | None = None) -> None:
     """Only the borrower or the item owner may see/touch a reservation."""
     if not (is_borrower(res, user) or is_lender(res, user, owner_id)):
-        raise AppError("FORBIDDEN", 403, "شما به این رزرو دسترسی ندارید.")
+        raise AppError("FORBIDDEN", 403, "You do not have access to this reservation.")
 
 
 def require_lender(res: Reservation, user: User, action_label: str, owner_id: int | None = None) -> None:
@@ -51,5 +51,5 @@ def require_lender(res: Reservation, user: User, action_label: str, owner_id: in
         raise AppError(
             "FORBIDDEN",
             403,
-            f"فقط صاحب وسیله می‌تواند این درخواست را {action_label} کند.",
+            f"Only the item owner can {action_label} this request.",
         )

@@ -7,7 +7,7 @@ The three locked entry points (spec §18.2) are:
     assert_bookable()          — B's booking path
     has_active_reservations()  — A's soft-delete guard
 `reservation_counts()` and `get_availability()` are the two extras the contract
-needs (داشبورد صاحب وسیله + تقویم), nothing else is exported.
+needs (owner dashboard + calendar), nothing else is exported.
 """
 
 from __future__ import annotations
@@ -70,7 +70,7 @@ def assert_bookable(db: Session, item_id: int, start: datetime, end: datetime) -
         raise AppError(
             "SLOT_CONFLICT",
             409,
-            "این بازه قبلاً رزرو شده است. یکی از بازه‌های پیشنهادی را انتخاب کنید.",
+            "This time slot is already booked. Pick one of the suggested alternatives.",
             details={
                 "item_id": item_id,
                 "requested": {"start_at": serialize_utc(start), "end_at": serialize_utc(end)},
@@ -162,8 +162,8 @@ def get_availability(
         raise AppError(
             "VALIDATION_ERROR",
             422,
-            "زمان باید با منطقهٔ زمانی ارسال شود.",
-            details={"fields": {"from": "منطقهٔ زمانی مشخص نیست."}},
+            "Timestamps must include a timezone.",
+            details={"fields": {"from": "Missing timezone."}},
         )
     frm = frm.astimezone(timezone.utc)
     to = to.astimezone(timezone.utc)
@@ -172,15 +172,15 @@ def get_availability(
         raise AppError(
             "VALIDATION_ERROR",
             422,
-            "پایان بازه باید بعد از شروع آن باشد.",
-            details={"fields": {"to": "باید بعد از «from» باشد."}},
+            "The end of the range must be after its start.",
+            details={"fields": {"to": "Must be after 'from'."}},
         )
 
     if to - frm > timedelta(days=settings.availability_max_range_days):
         raise AppError(
             "RANGE_TOO_WIDE",
             422,
-            f"حداکثر بازهٔ قابل نمایش {settings.availability_max_range_days} روز است.",
+            f"Availability can span at most {settings.availability_max_range_days} days.",
             details={"item_id": item_id, "max_days": settings.availability_max_range_days},
         )
 
@@ -189,9 +189,9 @@ def get_availability(
         {"item_id": item_id},
     ).one_or_none()
     if item is None:
-        raise not_found("وسیله پیدا نشد.")
+        raise not_found("Item not found.")
     if not item.is_active:
-        raise AppError("ITEM_INACTIVE", 409, "این وسیله در حال حاضر قابل رزرو نیست.")
+        raise AppError("ITEM_INACTIVE", 409, "This item is currently not available for booking.")
 
     # +1 row is the sentinel that tells us the range has too many bookings.
     busy = busy_intervals(db, item_id, frm, to, limit=settings.availability_max_rows + 1)
@@ -199,7 +199,7 @@ def get_availability(
         raise AppError(
             "RANGE_TOO_WIDE",
             422,
-            "این بازه رزروهای زیادی دارد؛ بازهٔ کوچک‌تری انتخاب کنید.",
+            "This range has too many bookings; choose a shorter range.",
             details={"item_id": item_id, "max_rows": settings.availability_max_rows},
         )
 

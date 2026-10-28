@@ -68,7 +68,7 @@ def test_only_one_of_fifty_wins(client, headers, item, borrower_factory, db):
 
     conflict = next(r for r in responses if r.status_code == 409).json()["error"]
     assert conflict["code"] == "SLOT_CONFLICT"
-    assert "رزرو" in conflict["message"]
+    assert "already booked" in conflict["message"].lower()
 
     details = conflict["details"]
     assert details["item_id"] == item.id
@@ -204,5 +204,5 @@ def test_23p01_is_translated_into_a_readable_409(client, headers, item, borrower
     assert res.status_code == 409, res.text
     error = res.json()["error"]
     assert error["code"] == "SLOT_CONFLICT"
-    assert "همین لحظه" in error["message"]
+    assert "just taken" in error["message"]
 

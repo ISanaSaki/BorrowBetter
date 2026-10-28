@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import get_settings
 from app.core.constants import ReservationStatus
-from app.core.errors import AppError, not_found
+from app.core.errors import AppError, not_found, sqlstate
 from app.models.item import Item
 from app.models.reservation import Reservation
 from app.models.user import User
@@ -46,12 +46,6 @@ MAX_SUGGESTION_SCAN = 200
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
-def sqlstate(exc: IntegrityError) -> str | None:
-    """psycopg3 → .sqlstate ; psycopg2 → .pgcode (never parse the message)."""
-    orig = exc.orig
-    return getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
-
-
 def _full_query():
     """Reservation with everything the response needs, in one round-trip."""
     return select(Reservation).options(
@@ -63,7 +57,7 @@ def _full_query():
 def _fetch_full(db: Session, reservation_id: int) -> Reservation:
     res = db.execute(_full_query().where(Reservation.id == reservation_id)).unique().scalar_one_or_none()
     if res is None:  # pragma: no cover - row vanished between statements
-        raise not_found("رزرو پیدا نشد.")
+        raise not_found("Reservation not found.")
     return res
 
 
@@ -122,9 +116,9 @@ def _conflict_error(
     conflicts = availability.busy_intervals(db, item_id, start, end)
     suggestions = build_suggestions(db, item_id, start, end)
     message = (
-        "این بازه همین لحظه توسط کاربر دیگری رزرو شد. یکی از بازه‌های پیشنهادی را انتخاب کنید."
+        "This slot was just taken by another user. Pick one of the suggested alternatives."
         if same_instant
-        else "این بازه قبلاً رزرو شده است. یکی از بازه‌های پیشنهادی را انتخاب کنید."
+        else "This time slot is already booked. Pick one of the suggested alternatives."
     )
     return AppError(
         "SLOT_CONFLICT",
@@ -221,11 +215,11 @@ def create_reservation(db: Session, borrower: User, payload: ReservationCreate) 
     ).scalar_one_or_none()
 
     if item is None:
-        raise not_found("وسیله پیدا نشد.")
+        raise not_found("Item not found.")
     if not item.is_active:
-        raise AppError("ITEM_INACTIVE", 409, "این وسیله در حال حاضر قابل رزرو نیست.")
+        raise AppError("ITEM_INACTIVE", 409, "This item is currently not available for booking.")
     if item.owner_id == borrower.id:
-        raise AppError("CANNOT_BOOK_OWN_ITEM", 403, "نمی‌توانید وسیلهٔ خودتان را رزرو کنید.")
+        raise AppError("CANNOT_BOOK_OWN_ITEM", 403, "You cannot book your own item.")
 
     # Free abandoned pending requests BEFORE judging availability.
     lifecycle.expire_stale_pending(db)
@@ -286,7 +280,7 @@ def transition(
     ).one_or_none()
 
     if row is None:
-        raise not_found("رزرو پیدا نشد.")
+        raise not_found("Reservation not found.")
     res, owner_id = row
 
     require_party(res, user, owner_id)
@@ -324,7 +318,7 @@ def transition(
 def get_reservation(db: Session, reservation_id: int, user: User) -> Reservation:
     res = db.execute(_full_query().where(Reservation.id == reservation_id)).unique().scalar_one_or_none()
     if res is None:
-        raise not_found("رزرو پیدا نشد.")
+        raise not_found("Reservation not found.")
     require_party(res, user)
     return res
 

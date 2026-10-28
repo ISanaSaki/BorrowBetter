@@ -82,7 +82,7 @@ def test_borrower_cannot_approve(client, headers, borrower, item):
     )
     assert res.status_code == 403
     assert res.json()["error"]["code"] == "FORBIDDEN"
-    assert "صاحب وسیله" in res.json()["error"]["message"]
+    assert "only the item owner" in res.json()["error"]["message"].lower()
 
 
 def test_double_approve_is_invalid_transition(client, headers, borrower, owner, item):

@@ -54,10 +54,10 @@ def main() -> int:
         health = httpx.get(BASE.replace("/api/v1", "") + "/health", timeout=10).json()
         check("health is ok", health.get("status") == "ok", str(health))
 
-        catalog = client.get("/items", params={"q": "دریل"}).json()
+        catalog = client.get("/items", params={"q": "drill"}).json()
         check("catalog search works", catalog["meta"]["total"] >= 1, str(catalog["meta"]))
         drill = next(
-            (row for row in catalog["data"] if row["title"] == "دریل برقی بوش"), None
+            (row for row in catalog["data"] if row["title"] == "Bosch electric drill"), None
         )
         check("demo drill exists", drill is not None)
         if drill is None:
@@ -67,12 +67,14 @@ def main() -> int:
         sana = login(client, "sana@demo.ir")
         shaghayegh = login(client, "shaghayegh@demo.ir")
 
-        tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).replace(
+        # The seed keeps a pending request on the drill at "now + 24h", so the demo
+        # books two days ahead — a window that is guaranteed to be free.
+        day = (datetime.now(timezone.utc) + timedelta(days=2)).replace(
             hour=10, minute=0, second=0, microsecond=0
         )
-        start, end = tomorrow, tomorrow + timedelta(hours=4)
+        start, end = day, day + timedelta(hours=4)
 
-        print("\n2) borrower requests tomorrow 10:00–14:00")
+        print("\n2) borrower requests a free window (day after tomorrow, 10:00–14:00)")
         created = client.post(
             "/reservations",
             json={"item_id": drill["id"], "start_at": iso(start), "end_at": iso(end)},

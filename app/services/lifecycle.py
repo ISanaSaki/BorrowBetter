@@ -12,15 +12,15 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.constants import STATUS_LABELS_FA, ReservationStatus
+from app.core.constants import ReservationStatus
 from app.core.errors import AppError
 
 ACTION_LABELS_FA: dict[str, str] = {
-    "approve": "تأیید",
-    "reject": "رد",
-    "cancel": "لغو",
-    "handover": "ثبت تحویل",
-    "return": "ثبت بازگشت",
+    "approve": "approve",
+    "reject": "reject",
+    "cancel": "cancel",
+    "handover": "hand over",
+    "return": "return",
 }
 
 #: (action, current status) -> next status
@@ -50,8 +50,8 @@ def validate_window(start: datetime, end: datetime) -> None:
         raise AppError(
             "VALIDATION_ERROR",
             422,
-            "پایان بازه باید بعد از شروع آن باشد.",
-            details={"fields": {"end_at": "باید بعد از start_at باشد."}},
+            "The end of the range must be after its start.",
+            details={"fields": {"end_at": "Must be after start_at."}},
         )
 
     duration = end - start
@@ -59,23 +59,23 @@ def validate_window(start: datetime, end: datetime) -> None:
         raise AppError(
             "VALIDATION_ERROR",
             422,
-            f"حداقل مدت رزرو {settings.min_duration_hours} ساعت است.",
-            details={"fields": {"end_at": "مدت رزرو کوتاه‌تر از حد مجاز است."}},
+            f"Minimum booking duration is {settings.min_duration_hours} hour(s).",
+            details={"fields": {"end_at": "Duration is shorter than allowed."}},
         )
     if duration > timedelta(days=settings.max_duration_days):
         raise AppError(
             "VALIDATION_ERROR",
             422,
-            f"حداکثر مدت رزرو {settings.max_duration_days} روز است.",
-            details={"fields": {"end_at": "مدت رزرو بیشتر از حد مجاز است."}},
+            f"Maximum booking duration is {settings.max_duration_days} day(s).",
+            details={"fields": {"end_at": "Duration is longer than allowed."}},
         )
 
     if start < now - timedelta(minutes=settings.clock_skew_tolerance_minutes):
         raise AppError(
             "VALIDATION_ERROR",
             422,
-            "زمان شروع نمی‌تواند در گذشته باشد.",
-            details={"fields": {"start_at": "زمان شروع در گذشته است."}},
+            "Start time cannot be in the past.",
+            details={"fields": {"start_at": "Start time is in the past."}},
         )
 
     horizon = now + timedelta(days=settings.booking_horizon_days)
@@ -83,8 +83,8 @@ def validate_window(start: datetime, end: datetime) -> None:
         raise AppError(
             "VALIDATION_ERROR",
             422,
-            f"رزرو حداکثر تا {settings.booking_horizon_days} روز آینده ممکن است.",
-            details={"fields": {"start_at": "زمان شروع بیش از حد دور است."}},
+            f"Bookings are limited to {settings.booking_horizon_days} days ahead.",
+            details={"fields": {"start_at": "Start time is too far in the future."}},
         )
 
 
@@ -115,15 +115,14 @@ def expire_stale_pending(db: Session) -> int:
 
 
 def transition_target(action: str, current_status: str) -> str:
-    """Next status for (action, current) or 409 INVALID_TRANSITION with a Persian message."""
+    """Next status for (action, current) or 409 INVALID_TRANSITION."""
     target = TRANSITIONS.get((action, current_status))
     if target is None:
-        label = STATUS_LABELS_FA.get(current_status, current_status)
         verb = ACTION_LABELS_FA.get(action, action)
         raise AppError(
             "INVALID_TRANSITION",
             409,
-            f"این درخواست در وضعیت «{label}» است و قابل {verb} نیست.",
+            f"Cannot {verb} a request in status '{current_status}'.",
             details={
                 "current_status": current_status,
                 "attempted_action": action,
