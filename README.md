@@ -164,3 +164,21 @@ frontend performs no conversion. `error.message` is user-facing and localised
 | `make seed` | demo data (idempotent) |
 | `make test` | `pytest -q` |
 | `make reset` | wipe + rebuild the database |
+
+## Running without Docker (Windows / VS Code)
+
+Docker is the official path, but the API also runs from a plain terminal:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements-dev.txt
+python run.py            # or: .\run.cmd
+```
+
+VS Code is preconfigured: open the repository root, select `.venv\Scripts\python.exe`
+as the interpreter, then press `F5` and pick **API - run.py (local)** or
+**Tests (pytest)**.
+
+Full walkthrough, including PostgreSQL setup without Docker and a troubleshooting
+table: [`docs/LOCAL_DEV.md`](docs/LOCAL_DEV.md).
