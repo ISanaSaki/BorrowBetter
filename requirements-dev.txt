@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# Developer tooling only - not required at runtime and not installed in the image.
+ruff>=0.6,<0.9
