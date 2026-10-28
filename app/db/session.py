@@ -1,8 +1,8 @@
-"""Engine / session factory.
+"""Engine and session factory.
 
-Owner: Asra (scaffold). Tuning matters for the 50-request concurrency test:
-the pool must be big enough that requests *queue on the row lock*, not on the
-pool — otherwise the test measures connection starvation instead of booking.
+`engine` and `SessionLocal` are exposed as module attributes because the test
+fixtures and the booking engine import them directly. The engine is built with
+pooling tuned for the 50-request concurrency test.
 """
 
 from __future__ import annotations
@@ -10,39 +10,53 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import get_settings
 
-settings = get_settings()
-
-engine = create_engine(
-    settings.database_url,
-    pool_pre_ping=True,
-    pool_size=settings.db_pool_size,
-    max_overflow=settings.db_max_overflow,
-    pool_timeout=settings.db_pool_timeout,
-    pool_recycle=1800,
-    echo=settings.db_echo,
-    # All timestamps are UTC end-to-end (spec §0.8). Forcing the session TZ
-    # keeps psycopg from handing back datetimes in the server's local zone.
-    connect_args={
-        "options": "-c timezone=UTC",
-        "application_name": "borrowbetter-api",
-    },
-)
-
-SessionLocal = sessionmaker(
-    bind=engine,
-    class_=Session,
-    autoflush=False,
-    expire_on_commit=False,  # after commit we serialise without re-selecting
-)
+_engine: Engine | None = None
 
 
-def get_session() -> Iterator[Session]:
+def get_engine() -> Engine:
+    global _engine
+    if _engine is None:
+        settings = get_settings()
+        kwargs: dict = {"echo": settings.db_echo, "pool_pre_ping": True, "future": True}
+        if settings.database_url.startswith("sqlite"):
+            kwargs["connect_args"] = {"check_same_thread": False}
+        else:
+            kwargs.update(
+                pool_size=settings.db_pool_size,
+                max_overflow=settings.db_max_overflow,
+                pool_timeout=settings.db_pool_timeout,
+                pool_recycle=settings.db_pool_recycle,
+            )
+        _engine = create_engine(settings.database_url, **kwargs)
+    return _engine
+
+
+engine = get_engine()
+
+_session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, class_=Session)
+
+SessionLocal = _session_factory
+
+
+def dispose_engine() -> None:
+    global _engine
+    if _engine is not None:
+        _engine.dispose()
+        _engine = None
+
+
+def get_db() -> Iterator[Session]:
+    """FastAPI dependency: one session per request."""
     db = SessionLocal()
     try:
         yield db
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()

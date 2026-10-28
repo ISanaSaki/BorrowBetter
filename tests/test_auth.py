@@ -5,7 +5,7 @@ from __future__ import annotations
 VALID = {
     "email": "New.User@Example.com",
     "password": "Demo1234!",
-    "full_name": "کاربر تازه",
+    "full_name": "New User",
 }
 
 
@@ -46,7 +46,7 @@ def test_login_and_me(client):
 
     me = client.get("/api/v1/me", headers={"Authorization": f"Bearer {token}"})
     assert me.status_code == 200
-    assert me.json()["data"]["full_name"] == "کاربر تازه"
+    assert me.json()["data"]["full_name"] == "New User"
 
 
 def test_login_wrong_password(client):
@@ -58,7 +58,7 @@ def test_login_wrong_password(client):
     assert res.status_code == 401
     assert res.json()["error"]["code"] == "INVALID_CREDENTIALS"
     # Never reveal which half was wrong
-    assert "رمز" in res.json()["error"]["message"]
+    assert "password" in res.json()["error"]["message"].lower()
 
 
 def test_me_without_token(client):
@@ -74,6 +74,6 @@ def test_me_with_garbage_token(client):
 
 
 def test_unknown_field_is_rejected(client):
-    res = client.post("/api/v1/auth/register", json={**VALID, "fullName": "غلط"})
+    res = client.post("/api/v1/auth/register", json={**VALID, "fullName": "wrong"})
     assert res.status_code == 422
     assert "fullName" in res.json()["error"]["details"]["fields"]

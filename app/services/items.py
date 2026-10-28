@@ -1,67 +1,55 @@
-"""Item catalog: list/filter/sort, CRUD, dashboards.
+"""Catalog service (Backend A).
 
-Owner: Asra (scaffold).
-
-Date filtering goes through `availability.free_item_ids()` — this module never
-writes a query against `reservations` (spec §2.3).
+Hard rule: this module never queries the `reservations` table. Anything related
+to bookings is provided by `app/services/availability.py` (owned by Backend B).
 """
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
-from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import Select, func, select
+from sqlalchemy.orm import Session
 
-from app.core.constants import ItemCategory, ItemCondition
-from app.core.errors import AppError, forbidden, not_found
+from app.core.constants import CATEGORY_ORDER, ItemCategory, ItemCondition, SortOrder
+from app.core.errors import AppError, NotFound
 from app.models.item import Item
 from app.models.user import User
-from app.schemas.item import CategoryCount, ItemCreate, ItemDashboardOut, ItemOut, ItemUpdate, OwnerBrief
-from app.services import availability
+from app.schemas.item import ItemCreate, ItemUpdate
+from app.services.availability import (
+    free_item_ids,
+    has_active_reservations,
+    reservation_counts,
+)
+from app.services.search import text_filter
+
+MAX_FILTER_CANDIDATES = 5000
 
 
-def serialize(item: Item) -> ItemOut:
-    return ItemOut(
-        id=item.id,
-        owner_id=item.owner_id,
-        title=item.title,
-        description=item.description,
-        category=item.category,
-        condition=item.condition,
-        price_per_day=item.price_per_day,
-        image_url=item.image_url,
-        is_active=item.is_active,
-        owner=OwnerBrief(id=item.owner.id, full_name=item.owner.full_name),
-        created_at=item.created_at,
-        updated_at=item.updated_at,
-    )
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
-def _filters(
-    *,
-    q: str | None = None,
-    category: ItemCategory | None = None,
-    condition: ItemCondition | None = None,
-    price_max: int | None = None,
-    owner_id: int | None = None,
-    active_only: bool = True,
-) -> list:
-    conds: list = []
-    if active_only:
-        conds.append(Item.is_active.is_(True))
-    if q:
-        pattern = f"%{q.strip()}%"
-        conds.append(or_(Item.title.ilike(pattern), Item.description.ilike(pattern)))
-    if category is not None:
-        conds.append(Item.category == category)
-    if condition is not None:
-        conds.append(Item.condition == condition)
-    if price_max is not None:
-        conds.append(Item.price_per_day <= price_max)
-    if owner_id is not None:
-        conds.append(Item.owner_id == owner_id)
-    return conds
+def _apply_sort(stmt: Select, sort: SortOrder) -> Select:
+    if sort is SortOrder.PRICE_ASC:
+        return stmt.order_by(Item.price_per_day.asc(), Item.id.asc())
+    if sort is SortOrder.PRICE_DESC:
+        return stmt.order_by(Item.price_per_day.desc(), Item.id.desc())
+    return stmt.order_by(Item.created_at.desc(), Item.id.desc())
+
+
+def get_item(db: Session, item_id: int, *, only_active: bool = True) -> Item:
+    stmt = select(Item).where(Item.id == item_id)
+    if only_active:
+        stmt = stmt.where(Item.is_active.is_(True))
+    item = db.execute(stmt).unique().scalar_one_or_none()
+    if item is None:
+        raise NotFound("Item not found or no longer available.")
+    return item
 
 
 def list_items(
@@ -72,153 +60,112 @@ def list_items(
     condition: ItemCondition | None = None,
     price_max: int | None = None,
     owner_id: int | None = None,
-    available_from: datetime | None = None,
-    available_to: datetime | None = None,
-    sort: str = "newest",
+    sort: SortOrder = SortOrder.NEWEST,
     page: int = 1,
     limit: int = 20,
+    available_from: datetime | None = None,
+    available_to: datetime | None = None,
 ) -> tuple[list[Item], int]:
-    conds = _filters(
-        q=q,
-        category=category,
-        condition=condition,
-        price_max=price_max,
-        owner_id=owner_id,
-    )
+    conditions = [Item.is_active.is_(True)]
 
-    if available_from is not None and available_to is not None:
-        candidate_ids = db.scalars(select(Item.id).where(*conds)).all()
-        free = availability.free_item_ids(db, list(candidate_ids), available_from, available_to)
-        if not free:
-            return [], 0
-        conds.append(Item.id.in_(free))
+    if category is not None:
+        conditions.append(Item.category == category)
+    if condition is not None:
+        conditions.append(Item.condition == condition)
+    if price_max is not None:
+        conditions.append(Item.price_per_day <= price_max)
+    if owner_id is not None:
+        conditions.append(Item.owner_id == owner_id)
 
-    total = db.scalar(select(func.count()).select_from(Item).where(*conds)) or 0
+    clause = text_filter(q)
+    if clause is not None:
+        conditions.append(clause)
 
-    order = {
-        "price_asc": (Item.price_per_day.asc(), Item.id.asc()),
-        "price_desc": (Item.price_per_day.desc(), Item.id.desc()),
-    }.get(sort, (Item.created_at.desc(), Item.id.desc()))
-
-    rows = (
-        db.execute(
-            select(Item)
-            .options(joinedload(Item.owner))
-            .where(*conds)
-            .order_by(*order)
-            .offset((page - 1) * limit)
-            .limit(limit)
+    start, end = _as_utc(available_from), _as_utc(available_to)
+    if (start is None) != (end is None):
+        raise AppError(
+            "VALIDATION_ERROR",
+            422,
+            "Both available_from and available_to are required for a date filter.",
+            {"fields": {"available_from": "Must be sent together with available_to."}},
         )
-        .unique()
-        .scalars()
-        .all()
-    )
-    return list(rows), int(total)
+    if start is not None and end is not None:
+        if start >= end:
+            raise AppError(
+                "VALIDATION_ERROR",
+                422,
+                "Invalid time range: start must be before end.",
+                {"fields": {"available_to": "Must be after available_from."}},
+            )
+        # Backend A does not query reservations directly; it calls Backend B.
+        candidate_ids = list(
+            db.scalars(select(Item.id).where(*conditions).limit(MAX_FILTER_CANDIDATES)).all()
+        )
+        free_ids = free_item_ids(db, candidate_ids, start, end)
+        if not free_ids:
+            return [], 0
+        conditions.append(Item.id.in_(free_ids))
 
+    total = db.scalar(select(func.count(Item.id)).where(*conditions)) or 0
 
-def get_item(db: Session, item_id: int) -> Item:
-    item = db.execute(
-        select(Item).options(joinedload(Item.owner)).where(Item.id == item_id)
-    ).unique().scalar_one_or_none()
-    if item is None or not item.is_active:
-        raise not_found("وسیله پیدا نشد.")
-    return item
+    stmt = _apply_sort(select(Item).where(*conditions), sort)
+    stmt = stmt.offset((page - 1) * limit).limit(limit)
+    items = list(db.execute(stmt).unique().scalars().all())
+    return items, int(total)
 
 
 def create_item(db: Session, owner: User, payload: ItemCreate) -> Item:
-    item = Item(
-        owner_id=owner.id,
-        title=payload.title.strip(),
-        description=payload.description or "",
-        category=payload.category,
-        condition=payload.condition,
-        price_per_day=payload.price_per_day,
-        image_url=payload.image_url,
-    )
+    item = Item(owner_id=owner.id, **payload.model_dump())
     db.add(item)
     db.commit()
-    return get_item(db, item.id)
-
-
-def _owned_item(db: Session, item_id: int, user: User) -> Item:
-    item = db.execute(
-        select(Item).options(joinedload(Item.owner)).where(Item.id == item_id)
-    ).unique().scalar_one_or_none()
-    if item is None:
-        raise not_found("وسیله پیدا نشد.")
-    if item.owner_id != user.id:
-        raise forbidden("فقط صاحب وسیله می‌تواند آن را تغییر دهد.")
+    db.refresh(item)
     return item
 
 
-def update_item(db: Session, item_id: int, user: User, payload: ItemUpdate) -> Item:
-    item = _owned_item(db, item_id, user)
-    data = payload.model_dump(exclude_unset=True)
-    for field, value in data.items():
+def update_item(db: Session, item: Item, payload: ItemUpdate) -> Item:
+    for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(item, field, value)
     db.commit()
-    # Re-read without the `is_active` filter: deactivating an item is a valid
-    # PATCH and must not turn into a 404 for the owner.
-    refreshed = db.execute(
-        select(Item).options(joinedload(Item.owner)).where(Item.id == item_id)
-    ).unique().scalar_one()
-    return refreshed
+    db.refresh(item)
+    return item
 
 
-def soft_delete_item(db: Session, item_id: int, user: User) -> dict:
-    item = _owned_item(db, item_id, user)
-    if availability.has_active_reservations(db, item_id):
+def deactivate_item(db: Session, item: Item) -> Item:
+    if has_active_reservations(db, item.id):
         raise AppError(
             "ITEM_HAS_ACTIVE_RESERVATIONS",
             409,
-            "ابتدا رزروهای فعال این وسیله را تعیین تکلیف کنید.",
+            "This item has active reservations. Resolve them before deleting it.",
+            {"item_id": item.id},
         )
     item.is_active = False
     db.commit()
-    return {"id": item.id, "is_active": False}
+    db.refresh(item)
+    return item
 
 
-def list_my_items(db: Session, user: User, *, page: int = 1, limit: int = 20) -> tuple[list[ItemDashboardOut], int]:
-    conds = [Item.owner_id == user.id]
-    total = db.scalar(select(func.count()).select_from(Item).where(*conds)) or 0
-
-    rows = (
+def list_owner_items(db: Session, owner: User) -> list[tuple[Item, int, int]]:
+    """Owner items plus (active reservations, pending requests) from Backend B."""
+    items = list(
         db.execute(
             select(Item)
-            .options(joinedload(Item.owner))
-            .where(*conds)
-            .order_by(Item.created_at.desc(), Item.id.desc())
-            .offset((page - 1) * limit)
-            .limit(limit)
+            .where(Item.owner_id == owner.id)
+            .order_by(Item.is_active.desc(), Item.created_at.desc(), Item.id.desc())
         )
         .unique()
         .scalars()
         .all()
     )
-    counts = availability.reservation_counts(db, [item.id for item in rows])
-
-    out: list[ItemDashboardOut] = []
-    for item in rows:
-        base = serialize(item).model_dump()
-        active_count, pending_count = counts.get(item.id, (0, 0))
-        out.append(
-            ItemDashboardOut(
-                **base,
-                active_reservations_count=active_count,
-                pending_requests_count=pending_count,
-            )
-        )
-    return out, int(total)
+    counts = reservation_counts(db, [item.id for item in items])
+    return [(item, *counts.get(item.id, (0, 0))) for item in items]
 
 
-def category_counts(db: Session) -> list[CategoryCount]:
+def category_counts(db: Session) -> list[tuple[ItemCategory, int]]:
+    """All categories are returned (even empty ones) so UI chips stay stable."""
     rows = db.execute(
-        select(Item.category, func.count())
+        select(Item.category, func.count(Item.id))
         .where(Item.is_active.is_(True))
         .group_by(Item.category)
     ).all()
-    counts = {category: count for category, count in rows}
-    return [
-        CategoryCount(value=category, count=int(counts.get(category, 0)))
-        for category in ItemCategory
-    ]
+    found = {category: int(count) for category, count in rows}
+    return [(category, found.get(category, 0)) for category in CATEGORY_ORDER]
