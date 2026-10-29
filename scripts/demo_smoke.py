@@ -49,9 +49,11 @@ def iso(value: datetime) -> str:
 
 
 def main() -> int:
-    with httpx.Client(base_url=BASE, timeout=20) as client:
+    # trust_env=False: a system-wide HTTP proxy (VPN clients often set one) must
+    # never be used for 127.0.0.1 — otherwise the proxy answers 503.
+    with httpx.Client(base_url=BASE, timeout=20, trust_env=False) as client:
         print("\n1) health & catalog")
-        health = httpx.get(BASE.replace("/api/v1", "") + "/health", timeout=10).json()
+        health = httpx.get(BASE.replace("/api/v1", "") + "/health", timeout=10, trust_env=False).json()
         check("health is ok", health.get("status") == "ok", str(health))
 
         catalog = client.get("/items", params={"q": "drill"}).json()
